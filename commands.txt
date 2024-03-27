@@ -1,3 +1,7 @@
 conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 conda create --name pyt python=3.9.0
 conda remove --name pyt --all
+python -c "import site; print(site.getsitepackages())"
+conda install -c conda-forge cudatoolkit=11.2 cudnn=8.1.0
+python -m pip install "tensorflow<2.11"
+python.exe -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
