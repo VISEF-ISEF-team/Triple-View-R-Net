@@ -1,14 +1,6 @@
 from keras import Model
 from keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, concatenate, Conv2DTranspose, BatchNormalization, Dropout, Lambda
 
-cf = {
-    'n': 4,     # number of classes
-    'h': 256,   # input image height
-    'w': 256,   # input image width
-    'c': 1,     # number of channel
-}
-
-
 def unet_model(cf):
     inputs = Input((cf['h'], cf['w'], cf['c']))
     s = inputs
