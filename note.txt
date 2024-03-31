@@ -1,0 +1,20 @@
+Dataset need evaluated
+
+Cardiac dataset:
+- CHD
+- MMWHS
+- CAS
+- TBAD
+- VHSCDD
+
+Others: 
+- Synapse
+- MSD
+- Sandstone
+
+
+Items need saving:
+- Training graphs
+- IoU, DSC for each class + mean + confusion matrix
+- model
+--> + a blation study
