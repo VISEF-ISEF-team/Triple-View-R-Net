@@ -1,8 +1,9 @@
 from keras import Model
 from keras.layers import Input, Conv2D, MaxPooling2D, concatenate, Conv2DTranspose, Dropout
 
-def unet_model(cf):
-    inputs = Input((cf['h'], cf['w'], cf['c']))
+def unet_model(cf, binary=False):
+    inputs = Input((cf['flat_p_shape']))
+    print(inputs.shape)
     s = inputs
     
     # Encoder
@@ -55,8 +56,10 @@ def unet_model(cf):
     c9 = Dropout(0.1)(c9)
     c9 = Conv2D(16, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c9)
      
-    outputs = Conv2D(cf['n'], (1, 1), activation='softmax')(c9)
+    if binary==False: outputs = Conv2D(cf['n'], (1, 1), activation='softmax')(c9)
+    else: outputs = Conv2D(cf['n'], (1, 1), activation='sigmoid')(c9)
      
     model = Model(inputs=[inputs], outputs=[outputs])
+
     return model
     
