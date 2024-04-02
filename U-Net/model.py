@@ -2,8 +2,7 @@ from keras import Model
 from keras.layers import Input, Conv2D, MaxPooling2D, concatenate, Conv2DTranspose, Dropout
 
 def unet_model(cf, binary=False):
-    inputs = Input((cf['flat_p_shape']))
-    print(inputs.shape)
+    inputs = Input((cf['h'], cf['w'], cf['c']))
     s = inputs
     
     # Encoder
@@ -27,6 +26,8 @@ def unet_model(cf, binary=False):
     c4 = Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c4)
     p4 = MaxPooling2D(pool_size=(2, 2))(c4)
      
+     
+    # bottle neck
     c5 = Conv2D(256, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(p4)
     c5 = Dropout(0.3)(c5)
     c5 = Conv2D(256, (3, 3), activation='relu', kernel_initializer='he_normal', padding='same')(c5)
