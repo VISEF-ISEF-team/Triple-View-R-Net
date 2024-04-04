@@ -16,10 +16,13 @@ class Mlp(nn.Module):
         self.drop = nn.Dropout(drop)
 
     def forward(self, x):
+        print('\nFEED FORWARD MLP')
         x = self.fc1(x)
+        print(f'x after fully connected layer 1: {x.size()}')
         x = self.act(x)
         x = self.drop(x)
         x = self.fc2(x)
+        print(f'x after fully connected layer 2: {x.size()}')
         x = self.drop(x)
         return x
 
@@ -36,6 +39,12 @@ def window_partition(x, window_size):
     B, H, W, C = x.shape
     x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
+    
+    print(f'''WINDOW PARTITION
+          window_size: {window_size}
+          x before window partition: {x.size()},
+          x after window partition: {windows.size()}''')
+    
     return windows
 
 
@@ -50,9 +59,18 @@ def window_reverse(windows, window_size, H, W):
     Returns:
         x: (B, H, W, C)
     """
+    print(f'''\nWINDOW REVERSE
+          widow_size: {window_size}
+          windows: {windows.size()}
+          H: {H}, W: {W}''')
+    
+    num_windows = (H * W) * (window_size * window_size)
+    print(f'num_windows: {num_windows}')
     B = int(windows.shape[0] / (H * W / window_size / window_size))
     x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
+    print(f'x after window view: {x.size()}')
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+    print(f'x after permute: {x.size()}')
     return x
 
 
@@ -110,17 +128,30 @@ class WindowAttention(nn.Module):
             x: input features with shape of (num_windows*B, N, C)
             mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
         """
+        print('\nWINDOW ATTENTION MECHANISM')
         B_, N, C = x.shape
-        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        print(f'input x: {x.size()}')
+        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads)
+        print(f'qkv matrices: {qkv.size()}')
+        qkv = qkv.permute(2, 0, 3, 1, 4)
+        print(f'qkv matrices after pertmute: {qkv.size()}')
         q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
 
         q = q * self.scale
+        print(f'q scale: {self.scale}, q after scale: {q.size()}')
         attn = (q @ k.transpose(-2, -1))
+        print(f'Attention matrix: {attn.size()}')
+        
 
         relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
             self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
+        print(f'relative_position_bias: {relative_position_bias.size()}')
+        
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+        print(f'relative_position_bias after permute: {relative_position_bias.size()}')
+        
         attn = attn + relative_position_bias.unsqueeze(0)
+        print(f'attention matrix after + relative_position_bias: {attn.size()}')
 
         if mask is not None:
             nW = mask.shape[0]
@@ -130,10 +161,14 @@ class WindowAttention(nn.Module):
         else:
             attn = self.softmax(attn)
 
-        attn = self.attn_drop(attn)
+        attn = self.attn_drop(attn)  # softmax cho dim cuối 
 
-        x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
+        x = (attn @ v)
+        print(f'x is result of attn x values: {x.size()}')
+        x = x.transpose(1, 2).reshape(B_, N, C)
+        print(f'x after transpose and reshape: {x.size()}')
         x = self.proj(x)
+        print(f'x after linear dense: {x.size()}')
         x = self.proj_drop(x)
         return x
 
@@ -225,41 +260,63 @@ class SwinTransformerBlock(nn.Module):
         self.register_buffer("attn_mask", attn_mask)
 
     def forward(self, x):
+        print('\nSWIN TRANSFORMER')
         H, W = self.input_resolution
         B, L, C = x.shape
         assert L == H * W, "input feature has wrong size"
 
+        print(f'input x: {x.size()}')
+        print(f'input_resolution: {self.input_resolution}')
+
         shortcut = x
         x = self.norm1(x)
         x = x.view(B, H, W, C)
+        print(f'x after norm & decompose view: {x.size()}')
 
         # cyclic shift
+        print('CYCLIC SHIFT')
         if self.shift_size > 0:
             shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
+            print(f'shift_size: {self.shift_size}, shifted_x: {shifted_x.size()}')
         else:
             shifted_x = x
+            print(f'shifted _x: {shifted_x.size()}')
 
         # partition windows
         x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+        print(f'x after wind_partition: {x_windows.size()}')
         x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
-
+        print(f'x_windows: {x_windows.size()}')
+        
         # W-MSA/SW-MSA
         attn_windows = self.attn(x_windows, mask=self.attn_mask)  # nW*B, window_size*window_size, C
+        print(f'attn_windows: {attn_windows.size()}')
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
+        print(f'attn_windows after reshape: {attn_windows.size()}')
+        
         shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
+        print(f'x after window_reverse: {shifted_x.size()}')                            
 
         # reverse cyclic shift
+        print('\nREVERSE CYCLIC SHIFT')
         if self.shift_size > 0:
             x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+            print(f'shift_size: {self.shift_size}, reverse_shifted_x: {x.size()}')
         else:
             x = shifted_x
+            print(f'reverse_shifted_x: {x.size()}')
+            
         x = x.view(B, H * W, C)
-
+        print(f'x after reshape: {x.size()}')
+        
         # FFN
         x = shortcut + self.drop_path(x)
+        print(f'x after residual connection: {x.size()}')
+        
         x = x + self.drop_path(self.mlp(self.norm2(x)))
+        print(f'x after feed forward: norm -> mlp -> drop_path: {x.size()}')
 
         return x
 
@@ -302,24 +359,38 @@ class PatchMerging(nn.Module):
         """
         x: B, H*W, C
         """
+        
+        print('\nPATCH MERGING')
+        
         H, W = self.input_resolution
         B, L, C = x.shape
         assert L == H * W, "input feature has wrong size"
         assert H % 2 == 0 and W % 2 == 0, f"x size ({H}*{W}) are not even."
+        
+        print(f'input x: {x.size()}')
+        print(f'input_resolution: {self.input_resolution}')
 
         x = x.view(B, H, W, C)
+        print(f'x after decompose: {x.size()}')
 
         x0 = x[:, 0::2, 0::2, :]  # B H/2 W/2 C
         x1 = x[:, 1::2, 0::2, :]  # B H/2 W/2 C
         x2 = x[:, 0::2, 1::2, :]  # B H/2 W/2 C
         x3 = x[:, 1::2, 1::2, :]  # B H/2 W/2 C
+        
+        print(f'x0: {x0.size()}, x1: {x1.size()}, x2: {x2.size()}, x3: {x3.size()}')
+        
         x = torch.cat([x0, x1, x2, x3], -1)  # B H/2 W/2 4*C
+        print(f'x after concat x0, x1, x2, x3: {x.size()}')
+        
         x = x.view(B, -1, 4 * C)  # B H/2*W/2 4*C
+        print(f'x after recompose: {x.size()}')
 
         x = self.norm(x)
         x = self.reduction(x)
-
+        print(f'x after norm and reduction: {x.size()}')
         return x
+    
 
     def extra_repr(self) -> str:
         return f"input_resolution={self.input_resolution}, dim={self.dim}"
@@ -342,15 +413,23 @@ class PatchExpand(nn.Module):
         """
         x: B, H*W, C
         """
+        print('\nPATCH EXPANDING')
         H, W = self.input_resolution
         x = self.expand(x)
         B, L, C = x.shape
         assert L == H * W, "input feature has wrong size"
 
+        print(f'input x: {x.size()}')
+
         x = x.view(B, H, W, C)
+        print(f'x after decompose: {x.size()}')
+        
         x = rearrange(x, 'b h w (p1 p2 c)-> b (h p1) (w p2) c', p1=2, p2=2, c=C//4)
-        x = x.view(B,-1,C//4)
-        x= self.norm(x)
+        print(f'x after rearrange: {x.size()}')
+        
+        x = x.view(B, -1, C//4)
+        x = self.norm(x)
+        print(f'x after reshape + norm: {x.size()}')
 
         return x
 
@@ -368,15 +447,26 @@ class FinalPatchExpand_X4(nn.Module):
         """
         x: B, H*W, C
         """
+        print('\nFINAL PATCH EXPANDING X4')
+        
         H, W = self.input_resolution
+        print(f'input_resolution: {self.input_resolution}')
+       
         x = self.expand(x)
+        print(f'x after expand using linear dense 16*dim: {x.size()}')
+        
         B, L, C = x.shape
         assert L == H * W, "input feature has wrong size"
 
         x = x.view(B, H, W, C)
+        print(f'x after decompose: {x.size()}')
+        
         x = rearrange(x, 'b h w (p1 p2 c)-> b (h p1) (w p2) c', p1=self.dim_scale, p2=self.dim_scale, c=C//(self.dim_scale**2))
-        x = x.view(B,-1,self.output_dim)
-        x= self.norm(x)
+        print(f'x after rearrange: {x.size()}')
+        
+        x = x.view(B, -1, self.output_dim)
+        x = self.norm(x)
+        print(f'x after reshape + norm: {x.size()}')
 
         return x
 
@@ -429,13 +519,19 @@ class BasicLayer(nn.Module):
             self.downsample = None
 
     def forward(self, x):
-        for blk in self.blocks:
+        print('\nBASIC LAYER')
+        for index, blk in enumerate(self.blocks):
+            print(f'block: {index}')
             if self.use_checkpoint:
                 x = checkpoint.checkpoint(blk, x)
+                print(f'x after block {index} + checkpoint: {x.size()}')
             else:
                 x = blk(x)
+                print(f'x after block {index}: {x.size()}')
+                
         if self.downsample is not None:
             x = self.downsample(x)
+            print(f'downsampling: {self.downsample}, x after downsampling: {x.size()}')
         return x
 
     def extra_repr(self) -> str:
@@ -498,13 +594,20 @@ class BasicLayer_up(nn.Module):
             self.upsample = None
 
     def forward(self, x):
-        for blk in self.blocks:
+        print('\nBASIC LAYER UP')
+        for index, blk in enumerate(self.blocks):
+            print(f'block: {index}')
             if self.use_checkpoint:
                 x = checkpoint.checkpoint(blk, x)
+                print(f'use_checkpoint: {self.use_checkpoint}, x after block {index}: {x.size()}')
             else:
                 x = blk(x)
+                print(f'x after block {index}: {x.size()}')
+                
         if self.upsample is not None:
             x = self.upsample(x)
+            print(f'upsample {self.upsample}, x after upsample: {x.size()}')
+            
         return x
 
 class PatchEmbed(nn.Module):
@@ -538,13 +641,21 @@ class PatchEmbed(nn.Module):
             self.norm = None
 
     def forward(self, x):
+        print('\nPATCH EMBEDDING')
         B, C, H, W = x.shape
+        print(f'input x: {x.size()}')
+        
         # FIXME look at relaxing size constraints
         assert H == self.img_size[0] and W == self.img_size[1], \
             f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
+            
         x = self.proj(x).flatten(2).transpose(1, 2)  # B Ph*Pw C
+        print(f'x after proj and flatten: {x.size()}')
+        
         if self.norm is not None:
             x = self.norm(x)
+            print(f'norm: {self.norm}, x after norm: {x.size()}')
+            
         return x
 
     def flops(self):
@@ -589,8 +700,11 @@ class SwinTransformerSys(nn.Module):
                  use_checkpoint=False, final_upsample="expand_first", **kwargs):
         super().__init__()
 
-        print("SwinTransformerSys expand initial----depths:{};depths_decoder:{};drop_path_rate:{};num_classes:{}".format(depths,
-        depths_decoder,drop_path_rate,num_classes))
+        print(f'''SwinTransformerSys expand initial----
+               depths:{depths} 
+               depths_decoder:{depths_decoder}
+               drop_path_rate:{drop_path_rate}
+               num_classes:{num_classes}''')
 
         self.num_classes = num_classes
         self.num_layers = len(depths)
@@ -601,14 +715,32 @@ class SwinTransformerSys(nn.Module):
         self.num_features_up = int(embed_dim * 2)
         self.mlp_ratio = mlp_ratio
         self.final_upsample = final_upsample
+        
+        print(f'''\nConfigurations:
+              num_classes: {self.num_classes}
+              num_layers: {self.num_layers}
+              embed_dims: {self.embed_dim}
+              ape: {self.ape}
+              patch_norm: {self.patch_norm}
+              num_features: {self.num_features}
+              num_features_up: {self.num_features_up}
+              mlp_ratio: {self.mlp_ratio}
+              final_upsample: {self.final_upsample}''')
 
+        print('\nEMBEDDING INIT')
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
-            norm_layer=norm_layer if self.patch_norm else None)
+            norm_layer=norm_layer if self.patch_norm else None
+        )
+        
         num_patches = self.patch_embed.num_patches
         patches_resolution = self.patch_embed.patches_resolution
         self.patches_resolution = patches_resolution
+        
+        print(f'''\nPATCH EMBBEDING INIT:
+              num_patches: {num_patches}
+              patches_resolution: {self.patches_resolution}''')
 
         # absolute position embedding
         if self.ape:
@@ -619,10 +751,27 @@ class SwinTransformerSys(nn.Module):
 
         # stochastic depth
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
+        
+        print(f'stochastic depth: {dpr}')
 
+        print('\nENCODER - DOWNSAMPLING LAYERS - INIT')
         # build encoder and bottleneck layers
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers):
+            
+            print(f'''\nLayer: {i_layer}:
+                        input_resolution: {(patches_resolution[0] // (2 ** i_layer), patches_resolution[1] // (2 ** i_layer))}
+                        num_heades: {num_heads[i_layer]}
+                        window_size: {window_size}
+                        mlp_ratio: {self.mlp_ratio}
+                        qkv_bias: {qkv_bias}, qk_scale: {qk_scale}
+                        drop_rate: {drop_rate}, attn_drop: {attn_drop_rate}
+                        drop_path: {dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])]}
+                        norm_layer: {norm_layer}
+                        downsample: {PatchMerging if (i_layer < self.num_layers - 1) else None}
+                        use_checkpoint: {use_checkpoint}
+                  ''')
+            
             layer = BasicLayer(dim=int(embed_dim * 2 ** i_layer),
                                input_resolution=(patches_resolution[0] // (2 ** i_layer),
                                                  patches_resolution[1] // (2 ** i_layer)),
@@ -639,18 +788,59 @@ class SwinTransformerSys(nn.Module):
             self.layers.append(layer)
         
         # build decoder layers
+        
+        print('\nDECODER - UPSAMPLING LAYERS - INIT')
         self.layers_up = nn.ModuleList()
         self.concat_back_dim = nn.ModuleList()
+    
         for i_layer in range(self.num_layers):
-            concat_linear = nn.Linear(2*int(embed_dim*2**(self.num_layers-1-i_layer)),
-            int(embed_dim*2**(self.num_layers-1-i_layer))) if i_layer > 0 else nn.Identity()
-            if i_layer ==0 :
-                layer_up = PatchExpand(input_resolution=(patches_resolution[0] // (2 ** (self.num_layers-1-i_layer)),
-                patches_resolution[1] // (2 ** (self.num_layers-1-i_layer))), dim=int(embed_dim * 2 ** (self.num_layers-1-i_layer)), dim_scale=2, norm_layer=norm_layer)
+            
+            in_features = 2 * int(embed_dim * 2 ** (self.num_layers - 1 - i_layer))
+            out_features = int(embed_dim*2**(self.num_layers-1-i_layer))
+            concat_linear = nn.Linear(in_features, out_features) if i_layer > 0 else nn.Identity()
+            
+            print(f'''\nLayer: {i_layer}
+                  in_features: {in_features}
+                  out_features: {out_features}''')
+            
+            if i_layer == 0:
+                layer_up_input_resolution =  (
+                    patches_resolution[0] // (2 ** (self.num_layers-1-i_layer)), 
+                    patches_resolution[1] // (2 ** (self.num_layers-1-i_layer))
+                )
+                layer_up_dim = int(embed_dim * 2 ** (self.num_layers-1-i_layer))
+                
+                print(f'''\n Layer: {i_layer}
+                      layer_up_input_resolution: {layer_up_input_resolution}
+                      layer_up_dim: {layer_up_dim} ''')
+            
+                layer_up = PatchExpand(input_resolution=layer_up_input_resolution, dim=layer_up_dim, dim_scale=2, norm_layer=norm_layer)
+            
+            
             else:
-                layer_up = BasicLayer_up(dim=int(embed_dim * 2 ** (self.num_layers-1-i_layer)),
+                
+                print(f'''\nLayer {i_layer}
+                    dim: {int(embed_dim * 2 ** (self.num_layers-1-i_layer))}
+                    input_resolution: {(
+                        patches_resolution[0] // (2 ** (self.num_layers-1-i_layer)),
+                        patches_resolution[1] // (2 ** (self.num_layers-1-i_layer))
+                    )}
+                    depth: {[(self.num_layers-1-i_layer)]}
+                    num_heads: {num_heads[(self.num_layers-1-i_layer)]}
+                    window_size: {window_size}
+                    mlp_ratio: {self.mlp_ratio}
+                    qkv_bias: {qkv_bias}, qk_scale: {qk_scale},
+                    drop: {drop_rate}, attn_drop: {attn_drop_rate},
+                    drop_path_start: {sum(depths[:(self.num_layers-1-i_layer)])}, drop_path_end: {sum(depths[:(self.num_layers-1-i_layer) + 1])}
+                    drop_path: {dpr[sum(depths[:(self.num_layers-1-i_layer)]):sum(depths[:(self.num_layers-1-i_layer) + 1])]}
+                    upsample: {PatchExpand if (i_layer < self.num_layers - 1) else None}
+                    use_checkpoint: {use_checkpoint},
+                    ''')
+                
+                layer_up = BasicLayer_up(
+                                dim=int(embed_dim * 2 ** (self.num_layers-1-i_layer)),
                                 input_resolution=(patches_resolution[0] // (2 ** (self.num_layers-1-i_layer)),
-                                                    patches_resolution[1] // (2 ** (self.num_layers-1-i_layer))),
+                                                  patches_resolution[1] // (2 ** (self.num_layers-1-i_layer))),
                                 depth=depths[(self.num_layers-1-i_layer)],
                                 num_heads=num_heads[(self.num_layers-1-i_layer)],
                                 window_size=window_size,
@@ -669,8 +859,15 @@ class SwinTransformerSys(nn.Module):
 
         if self.final_upsample == "expand_first":
             print("---final upsample expand_first---")
-            self.up = FinalPatchExpand_X4(input_resolution=(img_size//patch_size,img_size//patch_size),dim_scale=4,dim=embed_dim)
-            self.output = nn.Conv2d(in_channels=embed_dim,out_channels=self.num_classes,kernel_size=1,bias=False)
+            
+            self.up = FinalPatchExpand_X4(
+                input_resolution=(img_size // patch_size, 
+                                  img_size // patch_size),
+                dim_scale=4, dim=embed_dim)
+            
+            self.output = nn.Conv2d(in_channels=embed_dim,
+                                    out_channels=self.num_classes,
+                                    kernel_size=1,bias=False)
 
         self.apply(self._init_weights)
 
@@ -691,46 +888,78 @@ class SwinTransformerSys(nn.Module):
     def no_weight_decay_keywords(self):
         return {'relative_position_bias_table'}
 
-    #Encoder and Bottleneck
+    # Encoder and Bottleneck
     def forward_features(self, x):
+        print('\nDOWNSAMPLING')
+
         x = self.patch_embed(x)
+        print(f'x after patch embedding: {x.size()}')
+        
         if self.ape:
             x = x + self.absolute_pos_embed
+            print(f'x after absolute positional embedding: {x.size()}')
+        
         x = self.pos_drop(x)
+        print(f'x after position drop: {x.size()}')
+    
         x_downsample = []
-
-        for layer in self.layers:
+        for index, layer in enumerate(self.layers):
+            print(f'layer: {index}')
             x_downsample.append(x)
             x = layer(x)
+            print(f'x after layer {index}: {x.size()}')
 
         x = self.norm(x)  # B L C
-  
+        print(f'\nx after norm: {x.size()}')
+        
         return x, x_downsample
 
     #Dencoder and Skip connection
     def forward_up_features(self, x, x_downsample):
+        print('\nUPSAMPLING')
         for inx, layer_up in enumerate(self.layers_up):
             if inx == 0:
+                
                 x = layer_up(x)
             else:
-                x = torch.cat([x,x_downsample[3-inx]],-1)
+                print(f'''Layer: {inx}
+                      current_x: {x.size()}, x_downsample: {x_downsample[3 - inx].size()}
+                      ''')
+                x = torch.cat([x, x_downsample[3-inx]],-1)
+                print(f'x after concat: {x.size()}')
+                
                 x = self.concat_back_dim[inx](x)
+                print(f'x after concat_back_dim: {x.size()}')
+                
                 x = layer_up(x)
+                print(f'x after layer_up: {x.size()}')
 
         x = self.norm_up(x)  # B L C
-  
+        print(f'\nx after layer norm_up: {x.size()}')
+        
         return x
 
     def up_x4(self, x):
-        H, W = self.patches_resolution
+        H, W = self.patches_resolution        
         B, L, C = x.shape
         assert L == H*W, "input features has wrong size"
+        print('\n UPX4')
+        print(f'x: {x.size()}')
+        print(f'patches_resolution: {H, W}')
+        print(f'B: {B}, L: {L}, C: {C}')
 
         if self.final_upsample=="expand_first":
             x = self.up(x)
-            x = x.view(B,4*H,4*W,-1)
-            x = x.permute(0,3,1,2) #B,C,H,W
+            print(f'x after up(x): {x.size()}')
+            
+            x = x.view(B, 4*H, 4*W, -1)
+            print(f'x after reshape: {x.size()}')
+            
+            x = x.permute(0,3,1,2)     # B,C,H,W
+            print(f'x after permute: {x.size()}')
+            
             x = self.output(x)
+            print(f'x after output: {x.size()}')
             
         return x
 
