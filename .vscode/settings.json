@@ -10,3 +10,13 @@
 	"git.ignoreLimitWarning": true,
 	"python.analysis.typeCheckingMode": "off"
 }
+{
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingImports": "none",
+        "reportMissingModuleSource": "none"
+    },
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.autopep8"
+    },
+    "python.formatting.provider": "none"
+}

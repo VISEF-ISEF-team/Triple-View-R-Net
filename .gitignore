@@ -8,3 +8,5 @@ __pycache__
 models
 *.pth
 *.pth.tar
+data
+mode
