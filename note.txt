@@ -1,0 +1,29 @@
+Dataset need evaluated
+
+Cardiac dataset:
+- CHD
+- MMWHS
+- CAS
+- TBAD
+- VHSCDD
+
+Others: 
+- Synapse
+- MSD
+- Sandstone
+
+
+Items need saving:
+- Training graphs
+- IoU, DSC for each class + mean + confusion matrix
+- model
+--> + a blation study
+
+
+
+1. original state -> 512 x 512 x (206-275) -> Unet 2D
+2. resized state -> 256 x 256 x 256  -> unet 2D
+3. unet++, transunet, ... 3D unet, Vnet
+4. same with imageCHD -> train with best network
+5. seperate data label again + coronary combined -> train with best network -> create new data
+6. write results 

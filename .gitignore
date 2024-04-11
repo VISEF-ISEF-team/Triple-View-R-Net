@@ -1,0 +1,10 @@
+data
+*data_for_training/
+*images
+*masks
+files
+files/*
+__pycache__
+models
+*.pth
+*.pth.tar

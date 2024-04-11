@@ -1,0 +1,14 @@
+pytorch 
+torchvision 
+torchaudio 
+nibabel 
+matplotlib
+opencv-python 
+scikit-learn 
+patchify 
+tqdm 
+einops
+scikit-image
+monai 
+pandas
+torchinfo 
