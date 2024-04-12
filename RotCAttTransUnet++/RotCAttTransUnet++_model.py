@@ -50,6 +50,6 @@ class RotCAttTransUNetDense(nn.Module):
 
 config = get_config()
 model = RotCAttTransUNetDense(config=config).cuda()
-input = torch.rand(8, 1, 256, 256).cuda()
+input = torch.rand(3, 1, 256, 256).cuda()
 logits, _ = model(input)
 print(logits.size())
