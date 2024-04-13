@@ -4,14 +4,14 @@ from glob import glob
 import torch
 from tqdm import tqdm
 import torch.nn as nn
-from mmdataset2D import get_loaders
+from dataset import get_loaders, get_slice_from_volumetric_data, duplicate_end, duplicate_open_end
 from monai.losses import DiceLoss, TverskyLoss
-from unet2D import Unet
 import datetime
 from sklearn.metrics import accuracy_score, f1_score, jaccard_score, recall_score
-import pandas as pd
 import sys
 import csv
+from configs import get_config
+from RotCAttTransUnetDense_model import RotCAttTransUNetDense
 
 
 def seconds_to_hms(seconds):
@@ -19,14 +19,21 @@ def seconds_to_hms(seconds):
     return str(time_obj)
 
 
-def write_csv(path, data):
-    with open(path, mode='a', newline='') as file:
-        iteration = csv.writer(file)
-        iteration.writerow(data)
-    file.close()
+def write_csv(path, data, first=False):
+    if first:
+        with open(path, mode='w', newline='') as file:
+            iteration = csv.writer(file)
+            iteration.writerow(data)
+        file.close()
+
+    else:
+        with open(path, mode='a', newline='') as file:
+            iteration = csv.writer(file)
+            iteration.writerow(data)
+        file.close()
 
 
-def train(model, loader, optimizer, loss_fn, scaler, device=torch.device("cuda")):
+def train(model, loader, optimizer, loss_fn, scaler, batch_size, device=torch.device("cuda")):
     model.train()
     loop = tqdm(loader)
     steps = len(loader)
@@ -36,67 +43,95 @@ def train(model, loader, optimizer, loss_fn, scaler, device=torch.device("cuda")
     epoch_jaccard = 0.0
     epoch_recall = 0.0
     epoch_f1 = 0.0
+    iter_counter = 0
 
-    for iter, (x, y) in enumerate(loop):
-        sys.stdout.write(f"\riter: {iter+1}/{steps}")
-        sys.stdout.flush()
+    for x, y in loop:
 
-        x = x.to(device)
-        y = y.to(device)
-        optimizer.zero_grad()
+        x = duplicate_open_end(x)
+        y = duplicate_open_end(y)
 
-        # forward:
-        y_pred = model(x)
-        loss = loss_fn(y_pred, y)
+        length = x.shape[-1]
 
-        loss.backward()
-        optimizer.step()
+        for i in range(0, length, batch_size):
+            sys.stdout.write(f"\riter: {iter_counter + 1}")
+            sys.stdout.flush()
+            iter_counter += 1
 
-        # scaler.update()
+            # ensure balance slice count
+            if i + batch_size >= length:
+                num_slice = length - i
 
-        """Take argmax for accuracy calculation"""
-        y_pred = torch.argmax(y_pred, dim=1)
-        y_pred = y_pred.detach().cpu().numpy()
-        y = y.detach().cpu().numpy()
+                if num_slice < 3:
+                    for _ in range(3 - num_slice):
+                        x = duplicate_end(x)
+                        y = duplicate_end(y)
 
-        """Update batch metrics"""
-        batch_accuracy = accuracy_score(
-            y.flatten(), y_pred.flatten())
+                    num_slice = 3
 
-        batch_jaccard = jaccard_score(
-            y.flatten(), y_pred.flatten(), average="micro")
+            else:
+                num_slice = batch_size
 
-        batch_recall = recall_score(
-            y.flatten(), y_pred.flatten(), average="micro")
+            x_, y_ = get_slice_from_volumetric_data(x, y, i, num_slice)
+            x_ = x_.to(device)
+            y_ = y_.to(device)
 
-        batch_f1 = f1_score(y.flatten(),
-                            y_pred.flatten(), average="micro")
+            print(x_.shape, y_.shape)
+            optimizer.zero_grad()
 
-        batch_loss = loss.item()
-        batch_dice_coef = 1.0 - batch_loss
+            # forward:
+            y_pred, _ = model(x_)
+            loss = loss_fn(y_pred, y_)
 
-        """Update epoch metrics"""
-        epoch_loss += batch_loss
-        epoch_accuracy += batch_accuracy
-        epoch_jaccard += batch_jaccard
-        epoch_recall += batch_recall
-        epoch_f1 += batch_f1
+            loss.backward()
+            optimizer.step()
 
-        """Set loop postfix"""
-        loop.set_postfix(
-            {"loss": batch_loss, "dice_coef": batch_dice_coef, "accuracy": batch_accuracy, "iou": batch_jaccard})
+            # scaler.scale(loss).backward()
+            # scaler.step(optimizer)
+            # scaler.update()
 
-    epoch_loss = epoch_loss / steps
+            """Take argmax for accuracy calculation"""
+            y_pred = torch.argmax(y_pred, dim=1)
+            y_pred = y_pred.detach().cpu().numpy()
+            y_ = y_.detach().cpu().numpy()
+
+            """Update batch metrics"""
+            batch_accuracy = accuracy_score(
+                y_.flatten(), y_pred.flatten())
+
+            batch_jaccard = jaccard_score(
+                y_.flatten(), y_pred.flatten(), average="micro")
+
+            batch_recall = recall_score(
+                y_.flatten(), y_pred.flatten(), average="micro")
+
+            batch_f1 = f1_score(y_.flatten(),
+                                y_pred.flatten(), average="micro")
+
+            batch_loss = loss.item()
+            batch_dice_coef = 1.0 - batch_loss
+
+            """Update epoch metrics"""
+            epoch_loss += batch_loss
+            epoch_accuracy += batch_accuracy
+            epoch_jaccard += batch_jaccard
+            epoch_recall += batch_recall
+            epoch_f1 += batch_f1
+
+            """Set loop postfix"""
+            loop.set_postfix(
+                {"loss": batch_loss, "dice_coef": batch_dice_coef, "accuracy": batch_accuracy, "iou": batch_jaccard})
+
+    epoch_loss = epoch_loss / iter_counter
     epoch_dice_coef = 1.0 - epoch_loss
-    epoch_accuracy = epoch_accuracy / steps
-    epoch_jaccard = epoch_jaccard / steps
-    epoch_recall = epoch_recall / steps
-    epoch_f1 = epoch_f1 / steps
+    epoch_accuracy = epoch_accuracy / iter_counter
+    epoch_jaccard = epoch_jaccard / iter_counter
+    epoch_recall = epoch_recall / iter_counter
+    epoch_f1 = epoch_f1 / iter_counter
 
     return epoch_loss, epoch_dice_coef, epoch_accuracy, epoch_jaccard, epoch_recall, epoch_f1
 
 
-def evaluate(model, loader, loss_fn, device=torch.device("cuda")):
+def evaluate(model, loader, loss_fn, batch_size, device=torch.device("cuda")):
 
     epoch_loss = 0.0
     f1 = 0.0
@@ -104,41 +139,66 @@ def evaluate(model, loader, loss_fn, device=torch.device("cuda")):
     recall = 0.0
     jaccard = 0.0
     dice_coef = 0.0
+    iter_counter = 0
 
     model.eval()
     with torch.no_grad():
         for x, y in loader:
-            x = x.to(device)
-            y = y.to(device)
+            x = duplicate_open_end(x)
+            y = duplicate_open_end(y)
 
-            y_pred = model(x)
+            length = x.shape[-1]
 
-            # calculate loss
-            loss = loss_fn(y_pred, y)
-            epoch_loss += loss.item()
+            for i in range(0, length, batch_size):
+                iter_counter += 1
 
-            # take argmax to calculate other metrices
-            y_pred = torch.argmax(y_pred, dim=1)
+                # ensure balance slice count
+                if i + batch_size >= length:
+                    num_slice = length - i
 
-            # convert to numpy to calculate metrics
-            y_pred = y_pred.detach().cpu().numpy()
-            y = y.detach().cpu().numpy()
+                    if num_slice < 3:
+                        for _ in range(3 - num_slice):
+                            x = duplicate_end(x)
+                            y = duplicate_end(y)
 
-            # other metrics calculation
-            f1 += f1_score(y.flatten(),
-                           y_pred.flatten(), average="micro")
-            accuracy += accuracy_score(
-                y.flatten(), y_pred.flatten())
-            recall += recall_score(
-                y.flatten(), y_pred.flatten(), average="micro")
-            jaccard += jaccard_score(
-                y.flatten(), y_pred.flatten(), average="micro")
+                        num_slice = 3
+                else:
+                    num_slice = batch_size
 
-        epoch_loss = epoch_loss/len(loader)
-        f1 = f1 / len(loader)
-        accuracy = accuracy / len(loader)
-        recall = recall / len(loader)
-        jaccard = jaccard / len(loader)
+                x_, y_ = get_slice_from_volumetric_data(x, y, i, num_slice)
+
+                x_ = x_.to(device)
+                y_ = y_.to(device)
+
+                # pass input through model
+                y_pred, _ = model(x_)
+
+                # calculate loss
+                loss = loss_fn(y_pred, y_)
+                epoch_loss += loss.item()
+
+                # take argmax to calculate other metrices
+                y_pred = torch.argmax(y_pred, dim=1)
+
+                # convert to numpy to calculate metrics
+                y_pred = y_pred.detach().cpu().numpy()
+                y_ = y_.detach().cpu().numpy()
+
+                # other metrics calculation
+                f1 += f1_score(y_.flatten(),
+                               y_pred.flatten(), average="micro")
+                accuracy += accuracy_score(
+                    y_.flatten(), y_pred.flatten())
+                recall += recall_score(
+                    y_.flatten(), y_pred.flatten(), average="micro")
+                jaccard += jaccard_score(
+                    y_.flatten(), y_pred.flatten(), average="micro")
+
+        epoch_loss = epoch_loss/iter_counter
+        f1 = f1 / iter_counter
+        accuracy = accuracy / iter_counter
+        recall = recall / iter_counter
+        jaccard = jaccard / iter_counter
         dice_coef = 1.0 - epoch_loss
 
     return epoch_loss, f1, accuracy, recall, jaccard, dice_coef
@@ -147,21 +207,23 @@ def evaluate(model, loader, loss_fn, device=torch.device("cuda")):
 def main():
     """Define hyper parameters"""
     lr = 1e-4
+    batch_size = 6
     device = torch.device("cuda")
-    num_epochs = 50
+    num_epochs = 65
     checkpoint_path = "./files/2D_unet_checkpoint.pth.tar"
     train_metrics_path = "./files/RotCAttTransUnet++_train_metrics.csv"
     test_metrics_path = "./files/RotCAttTransUnet++_test_metrics.csv"
 
     """Initial write to csv to set rows"""
     write_csv(train_metrics_path, ["Loss", "Dice",
-              "Accuracy", "Jaccard", "Recall", "F1"])
+              "Accuracy", "Jaccard", "Recall", "F1"], first=True)
 
     write_csv(test_metrics_path, ["Loss", "Dice",
-              "Accuracy", "Jaccard", "Recall", "F1"])
+              "Accuracy", "Jaccard", "Recall", "F1"], first=True)
 
     """Initialize model and more"""
-    model = Unet(inc=1, outc=8)
+    config = get_config()
+    model = RotCAttTransUNetDense(config=config)
     model.to(device)
 
     """Define loss function"""
@@ -176,7 +238,7 @@ def main():
     scaler = torch.cuda.amp.GradScaler()
 
     """Test model output"""
-    r = model(torch.rand(1, 1, 256, 256).to(device))
+    r, _ = model(torch.rand(3, 1, 256, 256).to(device))
     print(f"Testing model output: {r.shape}")
 
     """Get loaderes"""
@@ -191,19 +253,19 @@ def main():
         """Main function call"""
         # train function
         train_loss, train_dice_coef, train_accuracy, train_jaccard, train_recall, train_f1 = train(model, train_loader, optimizer,
-                                                                                                   loss_fn, scaler, device)
+                                                                                                   loss_fn, scaler, batch_size, device)
 
         # validate function
         valid_loss, valid_f1, valid_accuracy, valid_recall, valid_jaccard, valid_dice_coef = evaluate(
-            model, val_loader, loss_fn, device)
+            model, val_loader, loss_fn, batch_size, device)
 
         """WRite to CSV"""
         # write to train
-        write_csv([train_loss, train_dice_coef, train_accuracy,
+        write_csv(train_metrics_path, [train_loss, train_dice_coef, train_accuracy,
                   train_jaccard, train_recall, train_f1])
 
         # write to test
-        write_csv([valid_loss, valid_dice_coef, valid_accuracy,
+        write_csv([test_metrics_path, valid_loss, valid_dice_coef, valid_accuracy,
                   valid_jaccard, valid_recall, valid_f1])
 
         """Check loss and update learning rate"""

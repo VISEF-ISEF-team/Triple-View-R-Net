@@ -106,17 +106,28 @@ def get_slice_from_volumetric_data(image_volume, mask_volume, start_idx, num_sli
     return images, masks
 
 
+def duplicate_open_end(x):
+    first_slice = x[:, :, 0].unsqueeze(2)
+    last_slice = x[:, :, -1].unsqueeze(2)
+    x = torch.cat((first_slice, x, last_slice), dim=2)
+
+    return x
+
+
+def duplicate_end(x):
+    last_slice = x[:, :, -1].unsqueeze(2)
+    x = torch.cat((x, last_slice), dim=2)
+
+    return x
+
+
 def main():
     train_loader, val_loader = get_loaders()
 
     for x, y in train_loader:
-        first_slice = x[:, :, 0].unsqueeze(2)
-        last_slice = x[:, :, -1].unsqueeze(2)
-        x = torch.cat((first_slice, x, last_slice), dim=2)
 
-        first_slice = y[:, :, 0].unsqueeze(2)
-        last_slice = y[:, :, -1].unsqueeze(2)
-        y = torch.cat((first_slice, y, last_slice), dim=2)
+        x = duplicate_open_end(x)
+        y = duplicate_open_end(y)
 
         length = x.shape[-1]
 
@@ -126,6 +137,13 @@ def main():
 
             if i + 8 >= length:
                 num_slice = length - i
+                if num_slice < 3:
+                    for i in range(3 - num_slice):
+                        x = duplicate_end(x)
+                        y = duplicate_end(y)
+
+                    num_slice = 3
+
             else:
                 num_slice = 8
 
@@ -133,7 +151,7 @@ def main():
 
             print(images.shape, masks.shape)
 
-        break
+        print("-" * 30)
 
 
 if __name__ == "__main__":

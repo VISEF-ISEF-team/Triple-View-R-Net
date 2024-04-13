@@ -5,7 +5,7 @@ def get_config():
     config = ml_collections.ConfigDict()
 
     # Input
-    config.num_classes = 8
+    config.num_classes = 14
     config.in_channels = 1
     config.img_size = 256
     config.p = [16, 8, 4, 2]
