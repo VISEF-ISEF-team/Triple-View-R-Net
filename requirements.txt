@@ -1,4 +1,4 @@
-pytorch 
+torch 
 torchvision 
 torchaudio 
 nibabel 
@@ -12,3 +12,4 @@ scikit-image
 monai 
 pandas
 torchinfo 
+ml-collections

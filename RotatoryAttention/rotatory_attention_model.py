@@ -25,14 +25,14 @@ class RotatoryAttentionModule(nn.Module):
         self.dvt = dvt
 
         """Key and Value matrices from Feature matrix"""
-        self.lkeyweight = nn.Parameter(torch.randn(dfl, self.dkl))
-        self.lvalueweight = nn.Parameter(torch.rand(dfl, self.dvl))
+        self.lkeyweight = nn.Linear(dfl, self.dkl, bias=False)
+        self.lvalueweight = nn.Linear(dfl, self.dvl, bias=False)
 
-        self.rkeyweight = nn.Parameter(torch.rand(dfr, self.dkr))
-        self.rvalueweight = nn.Parameter(torch.rand(dfr, self.dvr))
+        self.rkeyweight = nn.Linear(dfr, self.dkr, bias=False)
+        self.rvalueweight = nn.Linear(dfr, self.dvr, bias=False)
 
-        self.tkeyweight = nn.Parameter(torch.rand(dft, self.dkt))
-        self.tvalueweight = nn.Parameter(torch.rand(dft, self.dvt))
+        self.tkeyweight = nn.Linear(dft, self.dkt, bias=False)
+        self.tvalueweight = nn.Linear(dft, self.dvt, bias=False)
 
         """Weights for scoring function"""
         self.left_attention_score_bias = nn.Parameter(torch.zeros(1))
@@ -51,8 +51,8 @@ class RotatoryAttentionModule(nn.Module):
         self.right_t_attention_score_weight = nn.Parameter(
             torch.rand(self.dkt, self.dvr))
 
-        self.final_t_weights = nn.Parameter(
-            torch.randn(1, self.dft))
+        self.final_t_weights = nn.Linear(
+            1, self.dft, bias=False)
 
     def calculate_attention_score(self, query, key, weight, bias):
         E = torch.matmul(key, torch.unsqueeze(torch.matmul(
@@ -82,14 +82,14 @@ class RotatoryAttentionModule(nn.Module):
         return torch.matmul(c, weights)
 
     def forward(self, Ft, Fl, Fr):
-        rt = torch.mean(Ft, dim=0)
+        rt = torch.mean(Ft, dim=0)  # (dft, 1)
 
-        Kl = torch.matmul(Fl, self.lkeyweight)  # nfl x dkl
-        Vl = torch.matmul(Fl, self.lvalueweight)  # nfl x dvl
-        Kr = torch.matmul(Fr, self.rkeyweight)  # nfr, dkr
-        Vr = torch.matmul(Fr, self.rvalueweight)  # nfr, dvr
-        Kt = torch.matmul(Ft, self.tkeyweight)  # nft, dkt
-        Vt = torch.matmul(Ft, self.tvalueweight)  # nft, dvt
+        Kl = self.lkeyweight(Fl)  # nfl x dkl
+        Vl = self.lvalueweight(Fl)  # nfl x dvl
+        Kr = self.rkeyweight(Fr)  # nfr, dkr
+        Vr = self.rvalueweight(Fr)  # nfr, dvr
+        Kt = self.tkeyweight(Ft)  # nft, dkt
+        Vt = self.tvalueweight(Ft)  # nft, dvt
 
         El = self.calculate_attention_score(
             rt, Kl, self.left_attention_score_weight, self.left_attention_score_bias)
@@ -108,7 +108,7 @@ class RotatoryAttentionModule(nn.Module):
         Rrt = self.attention_align(Ert, Vt)
 
         R = torch.concat((Rl, Rr, Rlt, Rrt), dim=0)
-        R = self.final_context_transformation(R, self.final_t_weights)
+        R = self.final_t_weights(R)
         return R
 
 
@@ -270,6 +270,7 @@ def standalone_module_testing():
 
 
 if __name__ == "__main__":
+    standalone_module_testing()
     # model = RotatoryAttentionOnModel(image_width=256, image_height=256, outc=8)
 
     # input to attention will be a 3D tensor: (batch_size, sequence length, features)

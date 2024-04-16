@@ -12,6 +12,26 @@ import matplotlib.pyplot as plt
 import torch.nn.functional as F
 
 
+class CustomDiceLoss(nn.Module):
+    def __init__(self, weight=None, size_average=True):
+        super(CustomDiceLoss, self).__init__()
+
+    def forward(self, inputs, targets, smooth=1):
+
+        # comment out if your model contains a sigmoid or equivalent activation layer
+        inputs = torch.softmax(inputs, dim=1)
+
+        # flatten label and prediction tensors
+        inputs = inputs.contiguous().view(-1)
+        targets = targets.contiguous().view(-1)
+
+        intersection = (inputs * targets).sum()
+        dice = (2.*intersection + smooth) / \
+            (inputs.sum() + targets.sum() + smooth)
+
+        return 1 - dice
+
+
 class RotCAttTransDense_Dataset(Dataset):
     def __init__(self, images_path, masks_path):
         self.images_path = images_path
@@ -77,7 +97,7 @@ def get_loaders():
     return (train_loader, val_loader)
 
 
-def get_slice_from_volumetric_data(image_volume, mask_volume, start_idx, num_slice=8):
+def get_slice_from_volumetric_data(image_volume, mask_volume, start_idx, num_slice=12):
 
     end_idx = start_idx + num_slice
 
@@ -133,7 +153,7 @@ def main():
 
         print(f"Image Volume: {x.shape} || Mask Volume: {y.shape}")
 
-        for i in range(0, length, 8):
+        for i in range(0, length, 7):
 
             if i + 8 >= length:
                 num_slice = length - i

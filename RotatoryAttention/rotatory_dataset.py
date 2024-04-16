@@ -9,116 +9,186 @@ from sklearn.model_selection import train_test_split
 import nibabel as nib
 from skimage.transform import resize
 import matplotlib.pyplot as plt
+import torch.nn.functional as F
+import torch.nn as nn
 
 
-class ROTATORY_MMWHS(Dataset):
-    def __init__(self, root_images, root_masks, num_unique: list):
-        """
-        num_unique: list of unique heart index for current dataset
-        """
-        self.images = []
-        self.masks = []
+class CustomDiceLoss(nn.Module):
+    def __init__(self, weight=None, size_average=True):
+        super(CustomDiceLoss, self).__init__()
 
-        for n in num_unique:
-            image_paths = sorted(
-                glob(os.path.join(root_images, f"heart{n}-*_axial.png")))
-            mask_paths = sorted(
-                glob(os.path.join(root_masks, f"heartmaskencode{n}-*_axial.npy")))
+    def forward(self, inputs, targets, smooth=1):
 
-            assert len(image_paths) == len(
-                mask_paths), f"Length image: {len(image_paths)} is not equal to Length mask: {len(mask_paths)}"
+        # comment out if your model contains a sigmoid or equivalent activation layer
+        inputs = torch.softmax(inputs, dim=1)
 
-            for i in range(len(image_paths)):
-                # process slices of images
-                if (i == 0):
-                    batch = {
-                        "left": image_paths[i],
-                        "current": image_paths[i],
-                        "right": image_paths[i + 1]
-                    }
-                elif (i == len(image_paths) - 1):
-                    batch = {
-                        "left": image_paths[i - 1],
-                        "current": image_paths[i],
-                        "right": image_paths[i]
-                    }
-                else:
-                    batch = {
-                        "left": image_paths[i - 1],
-                        "current": image_paths[i],
-                        "right": image_paths[i + 1]
-                    }
+        # flatten label and prediction tensors
+        inputs = inputs.contiguous().view(-1)
+        targets = targets.contiguous().view(-1)
 
-                self.images.append(batch)
+        intersection = (inputs * targets).sum()
+        dice = (2.*intersection + smooth) / \
+            (inputs.sum() + targets.sum() + smooth)
 
-                # process mask
-                self.masks.append(mask_paths[i])
+        return 1 - dice
 
-        self.n_samples = len(self.images)
+
+class RotCAttTransDense_Dataset(Dataset):
+    def __init__(self, images_path, masks_path):
+        self.images_path = images_path
+        self.masks_path = masks_path
+        self.n_samples = len(self.images_path)
 
     def __len__(self):
         return self.n_samples
 
+    def normalize_image_intensity_range(self, img):
+        HOUNSFIELD_MAX = np.max(img)
+        HOUNSFIELD_MIN = np.min(img)
+        HOUNSFIELD_RANGE = HOUNSFIELD_MAX - HOUNSFIELD_MIN
+
+        img[img < HOUNSFIELD_MIN] = HOUNSFIELD_MIN
+        img[img > HOUNSFIELD_MAX] = HOUNSFIELD_MAX
+
+        return (img - HOUNSFIELD_MIN) / HOUNSFIELD_RANGE
+
+    def convert_label_to_class(self, mask):
+        lookup_table = {
+            0.0: 0.0,
+            500.0: 1.0,
+            600.0: 2.0,
+            420.0: 3.0,
+            550.0: 4.0,
+            205.0: 5.0,
+            820.0: 6.0,
+            850.0: 7.0,
+        }
+
+        for i in np.unique(mask):
+            mask[mask == i] = lookup_table[i]
+
     def __getitem__(self, index):
-        batch = self.images[index]
-        mask = np.load(self.masks[index])
+        image = nib.load(self.images_path[index]).get_fdata()
+        mask = nib.load(self.masks_path[index]).get_fdata()
 
-        image_l = cv2.imread(batch["left"], cv2.IMREAD_GRAYSCALE)
-        image_r = cv2.imread(batch["right"], cv2.IMREAD_GRAYSCALE)
-        image_current = cv2.imread(batch["current"], cv2.IMREAD_GRAYSCALE)
-
-        image_l = image_l / 255.0
-        image_l = image_l.astype(np.float32)
-        image_l = np.expand_dims(image_l, axis=0)
-
-        image_r = image_r / 255.0
-        image_r = image_r.astype(np.float32)
-        image_r = np.expand_dims(image_r, axis=0)
-
-        image_current = image_current / 255.0
-        image_current = image_current.astype(np.float32)
-        image_current = np.expand_dims(image_current, axis=0)
-
-        image = np.stack((image_l, image_current, image_r), axis=0)
-        mask = np.expand_dims(mask, 0).astype(np.uint8)
+        image = self.normalize_image_intensity_range(image)
+        self.convert_label_to_class(mask)
 
         return image, mask
 
 
-def load_dataset(total_size, split=0.2):
-    split_size = int(total_size * split)
-    a = np.arange(0, total_size, 1)
-    train, test = train_test_split(a, test_size=split_size)
-    print(f"Train: {len(train)} || Test: {len(test)}")
-    return train, test
+def load_dataset(image_path, mask_path, split=0.2):
+    images = sorted(glob(os.path.join(image_path, "*_image.nii.gz")))
+    masks = sorted(glob(os.path.join(mask_path, "*_label.nii.gz")))
+
+    split_size = int(split * len(images))
+
+    x_train, x_val = train_test_split(
+        images, test_size=split_size, random_state=42)
+
+    y_train, y_val = train_test_split(
+        masks, test_size=split_size, random_state=42)
+
+    return (x_train, y_train), (x_val, y_val)
 
 
 def get_loaders():
-    root_images = "../UNETR_MMWHS/files/images/"
-    root_masks = "../UNETR_MMWHS/files/masks/"
+    root = "../data_for_training/MMWHS/"
 
-    train, test = load_dataset(total_size=20)
+    root_images = os.path.join(root, "ct_train")
+    root_labels = os.path.join(root, "ct_train")
 
-    train_dataset = ROTATORY_MMWHS(
-        root_images=root_images, root_masks=root_masks, num_unique=train)
+    (x_train, y_train), (x_val, y_val) = load_dataset(root_images, root_labels)
 
+    print(f"Train: {len(x_train)} || {len(y_train)}")
+    print(f"Val: {len(x_val)} || {len(y_val)}")
+
+    train_dataset = RotCAttTransDense_Dataset(x_train, y_train)
     train_loader = DataLoader(
-        train_dataset, batch_size=1, shuffle=True, num_workers=4)
+        train_dataset, batch_size=None, shuffle=True, num_workers=6)
 
-    val_dataset = ROTATORY_MMWHS(
-        root_images=root_images, root_masks=root_masks, num_unique=test)
-    val_loader = DataLoader(val_dataset, batch_size=1,
-                            shuffle=False, num_workers=4)
+    val_dataset = RotCAttTransDense_Dataset(x_val, y_val)
+    val_loader = DataLoader(val_dataset, batch_size=None,
+                            shuffle=False, num_workers=6)
 
     return (train_loader, val_loader)
+
+
+def get_slice_from_volumetric_data(image_volume, mask_volume, start_idx, num_slice=12):
+
+    end_idx = start_idx + num_slice
+
+    images = torch.empty(num_slice, 1, 128, 128)
+    masks = torch.empty(num_slice, 1, 128, 128)
+
+    for i in range(start_idx, end_idx, 1):
+        image = image_volume[:, :, i].numpy()
+        image = cv2.resize(image, (128, 128))
+        image = np.expand_dims(image, axis=0)
+        image = torch.from_numpy(image)
+
+        images[i - start_idx, :, :, :] = image
+
+        mask = mask_volume[:, :, i].long()
+        mask = F.one_hot(mask, num_classes=8)
+        mask = mask.numpy()
+        mask = resize(mask, (128, 128, 8),
+                      preserve_range=True, anti_aliasing=True)
+        mask = torch.from_numpy(mask)
+        mask = torch.argmax(mask, dim=-1)
+        mask = torch.unsqueeze(mask, dim=0)
+
+        masks[i - start_idx, :, :, :] = mask
+
+    return images, masks
+
+
+def duplicate_open_end(x):
+    first_slice = x[:, :, 0].unsqueeze(2)
+    last_slice = x[:, :, -1].unsqueeze(2)
+    x = torch.cat((first_slice, x, last_slice), dim=2)
+
+    return x
+
+
+def duplicate_end(x):
+    last_slice = x[:, :, -1].unsqueeze(2)
+    x = torch.cat((x, last_slice), dim=2)
+
+    return x
 
 
 def main():
     train_loader, val_loader = get_loaders()
 
     for x, y in train_loader:
-        x = torch.squeeze(x, dim=0)
-        print(x.shape, y.shape)
+
+        x = duplicate_open_end(x)
+        y = duplicate_open_end(y)
+
+        length = x.shape[-1]
+
+        print(f"Image Volume: {x.shape} || Mask Volume: {y.shape}")
+
+        for i in range(0, length, 7):
+
+            if i + 8 >= length:
+                num_slice = length - i
+                if num_slice < 3:
+                    for i in range(3 - num_slice):
+                        x = duplicate_end(x)
+                        y = duplicate_end(y)
+
+                    num_slice = 3
+
+            else:
+                num_slice = 8
+
+            images, masks = get_slice_from_volumetric_data(x, y, i, num_slice)
+
+            print(images.shape, masks.shape)
+
+        print("-" * 30)
 
 
 if __name__ == "__main__":

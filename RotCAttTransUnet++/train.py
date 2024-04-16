@@ -4,8 +4,8 @@ from glob import glob
 import torch
 from tqdm import tqdm
 import torch.nn as nn
-from dataset import get_loaders, get_slice_from_volumetric_data, duplicate_end, duplicate_open_end
-from monai.losses import DiceLoss, TverskyLoss
+from dataset import get_loaders, get_slice_from_volumetric_data, duplicate_end, duplicate_open_end, CustomDiceLoss
+from monai.losses.dice import DiceLoss
 import datetime
 from sklearn.metrics import accuracy_score, f1_score, jaccard_score, recall_score
 import sys
@@ -52,7 +52,7 @@ def train(model, loader, optimizer, loss_fn, scaler, batch_size, device=torch.de
 
         length = x.shape[-1]
 
-        for i in range(0, length, batch_size):
+        for i in range(0, length, batch_size - 1):
             sys.stdout.write(f"\riter: {iter_counter + 1}")
             sys.stdout.flush()
             iter_counter += 1
@@ -75,11 +75,19 @@ def train(model, loader, optimizer, loss_fn, scaler, batch_size, device=torch.de
             x_ = x_.to(device)
             y_ = y_.to(device)
 
-            print(x_.shape, y_.shape)
             optimizer.zero_grad()
 
             # forward:
             y_pred, _ = model(x_)
+            y_pred = y_pred[1:-1]
+            y_ = y_[1:-1]
+
+            y_ = nn.functional.one_hot(y_.long(), num_classes=8)
+            y_ = torch.squeeze(y_, dim=1)
+            y_ = y_.permute(0, 3, 1, 2)
+
+            print(y_pred.shape, y_.shape)
+
             loss = loss_fn(y_pred, y_)
 
             loss.backward()
@@ -92,6 +100,7 @@ def train(model, loader, optimizer, loss_fn, scaler, batch_size, device=torch.de
             """Take argmax for accuracy calculation"""
             y_pred = torch.argmax(y_pred, dim=1)
             y_pred = y_pred.detach().cpu().numpy()
+            y_ = torch.argmax(y_, dim=1)
             y_ = y_.detach().cpu().numpy()
 
             """Update batch metrics"""
@@ -99,13 +108,13 @@ def train(model, loader, optimizer, loss_fn, scaler, batch_size, device=torch.de
                 y_.flatten(), y_pred.flatten())
 
             batch_jaccard = jaccard_score(
-                y_.flatten(), y_pred.flatten(), average="micro")
+                y_.flatten(), y_pred.flatten(), average="weighted")
 
             batch_recall = recall_score(
-                y_.flatten(), y_pred.flatten(), average="micro")
+                y_.flatten(), y_pred.flatten(), average="weighted")
 
             batch_f1 = f1_score(y_.flatten(),
-                                y_pred.flatten(), average="micro")
+                                y_pred.flatten(), average="weighted")
 
             batch_loss = loss.item()
             batch_dice_coef = 1.0 - batch_loss
@@ -173,12 +182,21 @@ def evaluate(model, loader, loss_fn, batch_size, device=torch.device("cuda")):
                 # pass input through model
                 y_pred, _ = model(x_)
 
+                y_pred = y_pred[1:-1]
+                y_ = y_[1:-1]
+
+                y_ = y_[1:-1]
+                y_ = torch.squeeze(y_, dim=1)
+                y_ = nn.functional.one_hot(y_.long(), num_classes=8)
+                y_ = y_.permute(0, 3, 1, 2)
+
                 # calculate loss
                 loss = loss_fn(y_pred, y_)
                 epoch_loss += loss.item()
 
                 # take argmax to calculate other metrices
                 y_pred = torch.argmax(y_pred, dim=1)
+                y_ = torch.argmax(y_, dim=1)
 
                 # convert to numpy to calculate metrics
                 y_pred = y_pred.detach().cpu().numpy()
@@ -186,13 +204,13 @@ def evaluate(model, loader, loss_fn, batch_size, device=torch.device("cuda")):
 
                 # other metrics calculation
                 f1 += f1_score(y_.flatten(),
-                               y_pred.flatten(), average="micro")
+                               y_pred.flatten(), average="weighted")
                 accuracy += accuracy_score(
                     y_.flatten(), y_pred.flatten())
                 recall += recall_score(
-                    y_.flatten(), y_pred.flatten(), average="micro")
+                    y_.flatten(), y_pred.flatten(), average="weighted")
                 jaccard += jaccard_score(
-                    y_.flatten(), y_pred.flatten(), average="micro")
+                    y_.flatten(), y_pred.flatten(), average="weighted")
 
         epoch_loss = epoch_loss/iter_counter
         f1 = f1 / iter_counter
@@ -215,10 +233,10 @@ def main():
     test_metrics_path = "./files/RotCAttTransUnet++_test_metrics.csv"
 
     """Initial write to csv to set rows"""
-    write_csv(train_metrics_path, ["Loss", "Dice",
+    write_csv(train_metrics_path, ["Epoch", "LR", "Loss", "Dice",
               "Accuracy", "Jaccard", "Recall", "F1"], first=True)
 
-    write_csv(test_metrics_path, ["Loss", "Dice",
+    write_csv(test_metrics_path, ["Epoch", "LR", "Loss", "Dice",
               "Accuracy", "Jaccard", "Recall", "F1"], first=True)
 
     """Initialize model and more"""
@@ -227,7 +245,9 @@ def main():
     model.to(device)
 
     """Define loss function"""
-    loss_fn = DiceLoss(to_onehot_y=True, softmax=True)
+    # loss_fn = DiceLoss(to_onehot_y=True, softmax=True,
+    #                    include_background=False)
+    loss_fn = CustomDiceLoss()
 
     """Define optimizer and scheduler"""
     optimizer = torch.optim.Adam(params=model.parameters(), lr=lr)
@@ -252,8 +272,8 @@ def main():
 
         """Main function call"""
         # train function
-        train_loss, train_dice_coef, train_accuracy, train_jaccard, train_recall, train_f1 = train(model, train_loader, optimizer,
-                                                                                                   loss_fn, scaler, batch_size, device)
+        train_loss, train_dice_coef, train_accuracy, train_jaccard, train_recall, train_f1 = train(
+            model, train_loader, optimizer, loss_fn, scaler, batch_size, device)
 
         # validate function
         valid_loss, valid_f1, valid_accuracy, valid_recall, valid_jaccard, valid_dice_coef = evaluate(
@@ -261,11 +281,11 @@ def main():
 
         """WRite to CSV"""
         # write to train
-        write_csv(train_metrics_path, [train_loss, train_dice_coef, train_accuracy,
+        write_csv(train_metrics_path, [epoch, lr, train_loss, train_dice_coef, train_accuracy,
                   train_jaccard, train_recall, train_f1])
 
         # write to test
-        write_csv([test_metrics_path, valid_loss, valid_dice_coef, valid_accuracy,
+        write_csv(test_metrics_path, [epoch, lr, valid_loss, valid_dice_coef, valid_accuracy,
                   valid_jaccard, valid_recall, valid_f1])
 
         """Check loss and update learning rate"""
@@ -295,7 +315,7 @@ def main():
         data_str += f'\t Val. Dice Coef: {valid_dice_coef:.3f}\n'
         print(data_str)
 
-        """Update lr count"""
+        """Update lr value"""
         lr = scheduler.get_last_lr()
 
 

@@ -41,10 +41,10 @@ class Attention(nn.Module):
                                                num_heads=1)  # num_heads=self.num_heads)
 
     def _build_projection(self, x, qkv):
-        print(f"Inner Transformer Attention Original shape: {x.shape}")
+        # print(f"Inner Transformer Attention Original shape: {x.shape}")
         if qkv == "q":
             x1 = F.relu(self.conv_q(x))
-            print(f"Inner Transformer Attention Query shape: {x1.shape}")
+            # print(f"Inner Transformer Attention Query shape: {x1.shape}")
 
             # move num_channel to back for layer norm
             x1 = x1.permute(0, 2, 3, 1)
@@ -52,14 +52,14 @@ class Attention(nn.Module):
             proj = x1.permute(0, 3, 1, 2)
         elif qkv == "k":
             x1 = F.relu(self.conv_k(x))
-            print(f"Inner Transformer Attention Key shape: {x1.shape}")
+            # print(f"Inner Transformer Attention Key shape: {x1.shape}")
 
             x1 = x1.permute(0, 2, 3, 1)
             x1 = self.layernorm_k(x1)
             proj = x1.permute(0, 3, 1, 2)
         elif qkv == "v":
             x1 = F.relu(self.conv_v(x))
-            print(f"Inner Transformer Attention Value shape: {x1.shape}")
+            # print(f"Inner Transformer Attention Value shape: {x1.shape}")
 
             x1 = x1.permute(0, 2, 3, 1)
             x1 = self.layernorm_v(x1)
@@ -76,8 +76,8 @@ class Attention(nn.Module):
 
     def forward(self, x):
         q, k, v = self.forward_conv(x)
-        print(
-            f"Inner Transformer Attention XKQV shape: {x.shape} || {q.shape} || {k.shape} || {v.shape}")
+        # print(
+        #     f"Inner Transformer Attention XKQV shape: {x.shape} || {q.shape} || {k.shape} || {v.shape}")
         q = q.view(x.shape[0], x.shape[1], x.shape[2]*x.shape[3])  # flatten
         k = k.view(x.shape[0], x.shape[1], x.shape[2]*x.shape[3])  # flatten
         v = v.view(x.shape[0], x.shape[1], x.shape[2]*x.shape[3])  # flatten
@@ -85,8 +85,8 @@ class Attention(nn.Module):
         k = k.permute(0, 2, 1)
         v = v.permute(0, 2, 1)
         x1 = self.attention(query=q, value=v, key=k, need_weights=False)
-        print(
-            f"Inner Transformer Attention after MHSA shape: {x1[0].shape}")
+        # print(
+        #     f"Inner Transformer Attention after MHSA shape: {x1[0].shape}")
         x1 = x1[0].permute(0, 2, 1)
         x1 = x1.view(x1.shape[0], x1.shape[1], np.sqrt(
             x1.shape[2]).astype(int), np.sqrt(x1.shape[2]).astype(int))
@@ -132,11 +132,11 @@ class Transformer(nn.Module):
         # skip connection
         x2 = torch.add(x1, x)  # add orignal with output from attention layer
 
-        print(f"Internal Transformer shape - x2: {x2.shape}")
+        # print(f"Internal Transformer shape - x2: {x2.shape}")
         # x2: (batch, channel, H, W)
 
         x3 = x2.permute(0, 2, 3, 1)
-        print(f"Internal Transformer shape - x3: {x3.shape}")
+        # print(f"Internal Transformer shape - x3: {x3.shape}")
         # x3: (batch, H, W, channel) => permute for layernorm to normalise the across the features
 
         x3 = self.layernorm(x3)
@@ -223,9 +223,9 @@ class Block_encoder_bottleneck(nn.Module):
             x1 = F.relu(self.conv2(x1))
             x1 = F.dropout(x1, 0.3)
             x1 = F.max_pool2d(x1, (2, 2))
-            print(f"Encoder block input shape before transformer: {x1.shape}")
+            # print(f"Encoder block input shape before transformer: {x1.shape}")
             out = self.trans(x1)
-            print(f"Encoder block output after transformer: {out.shape}")
+            # print(f"Encoder block output after transformer: {out.shape}")
             # without additional scaled image
 
         elif ((self.blk == "second") or (self.blk == "third") or (self.blk == "fourth")):
@@ -339,16 +339,16 @@ class FCT(nn.Module):
         self.ds9 = DS_out(filters[8], num_class)  # num class
 
     def forward(self, x):
-        print(f"Scale 1: {x.shape}")
+        # print(f"Scale 1: {x.shape}")
         # Multi-scale input
         scale_img_2 = self.scale_img(x)
-        print(f"Scale 2: {scale_img_2.shape}")
+        # print(f"Scale 2: {scale_img_2.shape}")
 
         scale_img_3 = self.scale_img(scale_img_2)
-        print(f"Scale 3: {scale_img_3.shape}")
+        # print(f"Scale 3: {scale_img_3.shape}")
 
         scale_img_4 = self.scale_img(scale_img_3)
-        print(f"Scale 4: {scale_img_4.shape}")
+        # print(f"Scale 4: {scale_img_4.shape}")
         print("-" * 25)
 
         print(f"Encoder block 1")
@@ -357,13 +357,13 @@ class FCT(nn.Module):
         skip1 = x
         print("-" * 25)
 
-        print(f"Encoder block 2")
+        # print(f"Encoder block 2")
         x = self.block_2(x, scale_img_2)
         # print(f"Block 2 out -> {list(x.size())}")
         skip2 = x
         print("-" * 25)
 
-        print(f"Encoder block 3")
+        # print(f"Encoder block 3")
         x = self.block_3(x, scale_img_3)
         # print(f"Block 3 out -> {list(x.size())}")
         skip3 = x
