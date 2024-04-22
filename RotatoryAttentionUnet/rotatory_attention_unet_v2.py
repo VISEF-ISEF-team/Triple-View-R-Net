@@ -29,8 +29,39 @@ class encoder_block(nn.Module):
         return s, p
 
 
-class decoder_block(nn.Module):
-    def __init__(self, inc, outc, flattened_dim):
+class attention_gate(nn.Module):
+    def __init__(self, inc, outc):
+        super().__init__()
+
+        self.Wg = nn.Sequential(
+            nn.Conv2d(inc, outc, kernel_size=1, padding=0),
+            nn.BatchNorm2d(outc),
+        )
+
+        self.Ws = nn.Sequential(
+            nn.Conv2d(inc, outc, kernel_size=1, padding=0),
+            nn.BatchNorm2d(outc),
+        )
+
+        self.relu = nn.ReLU(inplace=True)
+        self.output = nn.Sequential(
+            nn.Conv2d(outc, outc, kernel_size=1, padding=0),
+            # nn.Softmax(dim=1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, g, s):
+        Wg = self.Wg(g)
+        Ws = self.Ws(s)
+        out = self.relu(Wg + Ws)
+
+        out = self.output(out)
+
+        return out * s
+
+
+class rotatory_decoder_block(nn.Module):
+    def __init__(self, inc, outc, flattened_dim, key_dim):
         super().__init__()
 
         self.inc = inc
@@ -41,7 +72,8 @@ class decoder_block(nn.Module):
             in_channels=inc, out_channels=outc, kernel_size=2, stride=2)
 
         self.rag = LinearRotatoryAttentionModule(
-            inc, flattened_dim, inc, flattened_dim, inc, flattened_dim, flattened_dim, inc // 4, flattened_dim, inc // 4, flattened_dim, inc // 4)
+            flattened_dim, inc, flattened_dim, inc, flattened_dim, inc, key_dim, flattened_dim // 4, key_dim, flattened_dim // 4, key_dim, flattened_dim // 4)
+        self.ag = attention_gate(inc=outc, outc=outc)
 
         self.relu = nn.ReLU(inplace=True)
         self.sigmoid = nn.Sigmoid()
@@ -57,16 +89,12 @@ class decoder_block(nn.Module):
         new_output[-1] = x[-1]
 
         for i in range(1, n_sample - 1, 1):
-            # left = x[i - 1].view(self.inc, -1)
-            # current = x[i].view(self.inc, -1)
-            # right = x[i + 1].view(self.inc, -1)
-
-            # print(
-            #     f"Left: {left.shape} || Current: {current.shape} || Right: {right.shape}")
-
-            output = self.rag(x[i - 1].view(self.inc, -1), x[i].view(
-                self.inc, -1), x[i + 1].view(self.inc, -1))
-
+            output = self.rag(
+                x[i - 1].view(self.inc, -1).permute(1, 0),
+                x[i].view(self.inc, -1).permute(1, 0),
+                x[i + 1].view(self.inc, -1).permute(1, 0)
+            )
+            output = output.permute(1, 0)
             output = torch.unsqueeze(output.view(
                 self.inc, int(self.flattend_dim ** 0.5), int(self.flattend_dim ** 0.5)), dim=0)
 
@@ -77,8 +105,7 @@ class decoder_block(nn.Module):
         ##########
 
         """Improve upon unet attention"""
-        x = self.relu(x + s)
-        x = self.sigmoid(x)
+        s = self.ag(x, s)
 
         ##########
 
@@ -87,7 +114,7 @@ class decoder_block(nn.Module):
         return x
 
 
-class Rotatory_Attention_Unet(nn.Module):
+class Rotatory_Attention_Unet_v2(nn.Module):
     def __init__(self, image_size):
         super().__init__()
 
@@ -97,9 +124,12 @@ class Rotatory_Attention_Unet(nn.Module):
 
         self.b1 = conv_block(256, 512)
 
-        self.d1 = decoder_block(512, 256, int(image_size // (2 ** 3)) ** 2)
-        self.d2 = decoder_block(256, 128, int(image_size // (2 ** 2)) ** 2)
-        self.d3 = decoder_block(128, 64, int(image_size // (2 ** 1)) ** 2)
+        self.d1 = rotatory_decoder_block(512, 256, int(
+            image_size // (2 ** 3)) ** 2, 512)
+        self.d2 = rotatory_decoder_block(256, 128, int(
+            image_size // (2 ** 2)) ** 2, 256)
+        self.d3 = rotatory_decoder_block(
+            128, 64, int(image_size // (2 ** 1)) ** 2, 128)
 
         self.output = nn.Conv2d(64, 8, kernel_size=1, padding=0)
 
@@ -121,7 +151,7 @@ class Rotatory_Attention_Unet(nn.Module):
 
 if __name__ == "__main__":
     device = torch.device("cpu")
-    model = Rotatory_Attention_Unet(image_size=128).to(device)
+    model = Rotatory_Attention_Unet_v2(image_size=128).to(device)
     x = torch.rand(8, 1, 128, 128).to(device)
     output = model(x)
     print(f"Output: {output.shape}")

@@ -10,7 +10,9 @@ import datetime
 from sklearn.metrics import accuracy_score, f1_score, jaccard_score, recall_score
 import sys
 import csv
-from RotatoryAttentionUnet.rotatory_attention_unet_v2 import Rotatory_Attention_Unet
+from rotatory_attention_unet_v2 import Rotatory_Attention_Unet_v2
+from rotatory_attention_unet_v3 import Rotatory_Attention_Unet_v3
+from torchvision import transforms
 
 
 def seconds_to_hms(seconds):
@@ -34,6 +36,10 @@ def write_csv(path, data, first=False):
 
 def train(model, loader, optimizer, loss_fn, scaler, batch_size, device=torch.device("cuda")):
     model.train()
+    train_transform_trivial = transforms.Compose([
+        transforms.TrivialAugmentWide(num_magnitude_bins=5),
+    ])
+
     pbar = tqdm(loader)
     steps = len(loader)
     epoch_loss = 0.0
@@ -50,7 +56,7 @@ def train(model, loader, optimizer, loss_fn, scaler, batch_size, device=torch.de
 
         length = x.shape[-1]
 
-        for i in range(0, length, batch_size - 2):
+        for i in range(0, length, batch_size - 1):
             pbar.set_description(
                 f"Iter: {iter_counter} - Step: {step} / {steps}")
             iter_counter += 1
@@ -69,7 +75,8 @@ def train(model, loader, optimizer, loss_fn, scaler, batch_size, device=torch.de
             else:
                 num_slice = batch_size
 
-            x_, y_ = get_slice_from_volumetric_data(x, y, i, num_slice)
+            x_, y_ = get_slice_from_volumetric_data(
+                x, y, i, num_slice, train_transform=train_transform_trivial)
             x_ = x_.to(device)
             y_ = y_.to(device)
 
@@ -155,7 +162,7 @@ def evaluate(model, loader, loss_fn, batch_size, device=torch.device("cuda")):
 
             length = x.shape[-1]
 
-            for i in range(0, length, batch_size - 2):
+            for i in range(0, length, batch_size - 1):
                 iter_counter += 1
 
                 # ensure balance slice count
@@ -220,12 +227,12 @@ def evaluate(model, loader, loss_fn, batch_size, device=torch.device("cuda")):
 def main(load_model=False, starting_epoch=0, starting_lr=1e-3):
     """Define hyper parameters"""
     lr = starting_lr
-    batch_size = 18
+    batch_size = 4
     device = torch.device("cuda")
     num_epochs = 65
-    checkpoint_path = "./files/rotatory_attention_addition_new-training_unet.pth.tar"
-    train_metrics_path = "./files/rotatory_attention_addition_new-training_unet_train_metrics.csv"
-    test_metrics_path = "./files/rotatory_attention_addition_new-training_unet_test_metrics.csv"
+    checkpoint_path = "./files/rotatory_attention_addition_unet_v3_no-resize.pth.tar"
+    train_metrics_path = "./files/rotatory_attention_addition__unet_v3_no-resize_train_metrics.csv"
+    test_metrics_path = "./files/rotatory_attention_addition_unet_v3_no-resize_test_metrics.csv"
 
     """Initial write to csv to set rows"""
     if not load_model or starting_epoch == 0:
@@ -238,12 +245,12 @@ def main(load_model=False, starting_epoch=0, starting_lr=1e-3):
     """Initialize model and more"""
     if load_model:
         checkpoint = torch.load(checkpoint_path)
-        model = Rotatory_Attention_Unet(image_size=128)
+        model = Rotatory_Attention_Unet_v3(image_size=256)
         model.load_state_dict(checkpoint)
         model.to(device)
 
     else:
-        model = Rotatory_Attention_Unet(image_size=128)
+        model = Rotatory_Attention_Unet_v3(image_size=256)
         model.to(device)
 
     """Define loss function"""
@@ -261,7 +268,7 @@ def main(load_model=False, starting_epoch=0, starting_lr=1e-3):
     scaler = torch.cuda.amp.GradScaler()
 
     """Test model output"""
-    r = model(torch.rand(6, 1, 128, 128).to(device))
+    r = model(torch.rand(6, 1, 256, 256).to(device))
     print(f"Testing model output: {r.shape}")
 
     """Get loaderes"""
@@ -323,4 +330,4 @@ def main(load_model=False, starting_epoch=0, starting_lr=1e-3):
 
 
 if __name__ == "__main__":
-    main(load_model=False, starting_epoch=0)
+    main(load_model=False, starting_epoch=0, starting_lr=0.5)

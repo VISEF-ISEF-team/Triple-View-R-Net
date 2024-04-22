@@ -9,6 +9,28 @@ from sklearn.model_selection import train_test_split
 import nibabel as nib
 from skimage.transform import resize
 import matplotlib.pyplot as plt
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class CustomDiceLoss(nn.Module):
+    def __init__(self, weight=None, size_average=True):
+        super(CustomDiceLoss, self).__init__()
+
+    def forward(self, inputs, targets, smooth=1):
+
+        # comment out if your model contains a sigmoid or equivalent activation layer
+        inputs = torch.softmax(inputs, dim=1)
+
+        # flatten label and prediction tensors
+        inputs = inputs.contiguous().view(-1)
+        targets = targets.contiguous().view(-1)
+
+        intersection = (inputs * targets).sum()
+        dice = (2.*intersection + smooth) / \
+            (inputs.sum() + targets.sum() + smooth)
+
+        return 1 - dice
 
 
 class UNET_ATTENTION_ORIGINAL_DATASET(Dataset):
@@ -22,14 +44,21 @@ class UNET_ATTENTION_ORIGINAL_DATASET(Dataset):
 
     def __getitem__(self, index):
         image = cv2.imread(self.images_path[index], cv2.IMREAD_GRAYSCALE)
-        mask = np.load(self.masks_path[index])
-
+        image = cv2.resize(image, (128, 128))
         image = image / 255.0
         image = image.astype(np.float32)
         image = np.expand_dims(
             image, axis=0).astype(np.float32)
 
-        mask = np.expand_dims(mask, 0).astype(np.uint8)
+        mask = np.load(self.masks_path[index])
+        mask = torch.from_numpy(mask)
+        mask = F.one_hot(mask, num_classes=8)
+        mask = mask.numpy()
+        mask = resize(mask, (128, 128, 8),
+                      preserve_range=True, anti_aliasing=True)
+        mask = torch.from_numpy(mask)
+        mask = torch.argmax(mask, dim=-1)
+        mask = torch.unsqueeze(mask, dim=0)
 
         return image, mask
 
@@ -50,8 +79,8 @@ def load_dataset(image_path, mask_path, split=0.2):
 
 
 def get_loaders():
-    image_path = "../UNETR_MMWHS/files/images/"
-    mask_path = "../UNETR_MMWHS/files/masks/"
+    image_path = "../data_for_training/MMWHS/images/"
+    mask_path = "../data_for_training/MMWHS/masks/"
 
     (x_train, y_train), (x_val, y_val) = load_dataset(image_path, mask_path)
 
@@ -60,10 +89,10 @@ def get_loaders():
 
     train_dataset = UNET_ATTENTION_ORIGINAL_DATASET(x_train, y_train)
     train_loader = DataLoader(
-        train_dataset, batch_size=4, shuffle=True, num_workers=4)
+        train_dataset, batch_size=20, shuffle=True, num_workers=4)
 
     val_dataset = UNET_ATTENTION_ORIGINAL_DATASET(x_val, y_val)
-    val_loader = DataLoader(val_dataset, batch_size=4,
+    val_loader = DataLoader(val_dataset, batch_size=20,
                             shuffle=False, num_workers=4)
 
     return (train_loader, val_loader)

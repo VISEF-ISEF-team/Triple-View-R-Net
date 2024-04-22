@@ -74,6 +74,21 @@ class attention_gate(nn.Module):
         return out * s
 
 
+class EncoderPath(nn.Module):
+    def __init__(self, inc):
+        super().__init__()
+        self.e1 = encoder_block(inc, 64)
+        self.e2 = encoder_block(64, 128)
+        self.e3 = encoder_block(128, 256)
+
+    def forward(self, x):
+        s1, p1 = self.e1(x)
+        s2, p2 = self.e2(p1)
+        s3, p3 = self.e3(p2)
+
+        return p3, s1, s2, s3
+
+
 class decoder_block(nn.Module):
     def __init__(self, inc, outc):
         super().__init__()
@@ -91,8 +106,23 @@ class decoder_block(nn.Module):
         return x
 
 
-class Attention_Unet(nn.Module):
+class DecoderPath(nn.Module):
     def __init__(self):
+        super().__init__()
+        self.d1 = decoder_block([512, 256], 256)
+        self.d2 = decoder_block([256, 128], 128)
+        self.d3 = decoder_block([128, 64], 64)
+
+    def forward(self, b1, s1, s2, s3):
+        d1 = self.d1(b1, s3)
+        d2 = self.d2(d1, s2)
+        d3 = self.d3(d2, s1)
+
+        return d3
+
+
+class Attention_Unet(nn.Module):
+    def __init__(self, num_classes=8):
         super().__init__()
 
         self.e1 = encoder_block(1, 64)
@@ -105,7 +135,7 @@ class Attention_Unet(nn.Module):
         self.d2 = decoder_block([256, 128], 128)
         self.d3 = decoder_block([128, 64], 64)
 
-        self.output = nn.Conv2d(64, 8, kernel_size=1, padding=0)
+        self.output = nn.Conv2d(64, num_classes, kernel_size=1, padding=0)
 
     def forward(self, x):
         s1, p1 = self.e1(x)
@@ -126,8 +156,112 @@ class Attention_Unet(nn.Module):
         return output
 
 
+class Attention_Unet_Refracted(nn.Module):
+    def __init__(self, num_class=8):
+        super().__init__()
+
+        self.features = EncoderPath(inc=1)
+        self.bottle_neck = conv_block(256, 512)
+        self.reconstructor = DecoderPath()
+
+        self.output = nn.Conv2d(64, num_class, kernel_size=1, padding=0)
+
+    def activations_hook(self, grad):
+        self.gradients = grad
+
+    def forward(self, x):
+        p3, s1, s2, s3 = self.features(x)
+
+        b1 = self.bottle_neck(p3)
+
+        d3 = self.reconstructor(b1, s1, s2, s3)
+
+        output = self.output(d3)
+
+        return output
+
+
+class SegGradModel(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.features_conv = model.features
+        self.bottle_neck = model.bottle_neck
+        self.reconstructor = model.reconstructor
+        self.output = model.output
+
+    def activations_hook(self, grad):
+        self.gradients = grad
+
+    def get_activations_gradient(self):
+        return self.gradients
+
+    def get_activations(self, x):
+        p3, s1, s2, s3 = self.features_conv(x)
+
+        return self.bottle_neck(p3)
+
+    def forward(self, x):
+        p3, s1, s2, s3 = self.features_conv(x)
+        b1 = self.bottle_neck(p3)
+
+        # register hook on bottle neck layer
+        h = b1.register_hook(self.activations_hook)
+
+        d3 = self.reconstructor(b1, s1, s2, s3)
+
+        output = self.output(d3)
+
+        return output
+
+
+class Attention_Unet_Seg_Grad_Model(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.e1 = model.e1
+        self.e2 = model.e2
+        self.e3 = model.e3
+        self.b1 = model.b1
+        self.d1 = model.d1
+        self.d2 = model.d2
+        self.d3 = model.d3
+        self.output = model.output
+
+    def activations_hook(self, grad):
+        self.gradients = grad
+
+    def get_activations_gradient(self):
+        return self.gradients
+
+    def get_activations(self, x):
+        _, p1 = self.e1(x)
+        _, p2 = self.e2(p1)
+        _, p3 = self.e3(p2)
+
+        b1 = self.b1(p3)
+
+        return b1
+
+    def forward(self, x):
+        s1, p1 = self.e1(x)
+        s2, p2 = self.e2(p1)
+        s3, p3 = self.e3(p2)
+
+        b1 = self.b1(p3)
+
+        h = b1.register_hook(self.activations_hook)
+
+        d1 = self.d1(b1, s3)
+        d2 = self.d2(d1, s2)
+        d3 = self.d3(d2, s1)
+
+        output = self.output(d3)
+
+        return output
+
+
 if __name__ == "__main__":
     model = Attention_Unet()
-    x = torch.rand(1, 1, 64, 64)
+    x = torch.rand(3, 1, 128, 128)
     output = model(x)
     print(output.shape)
+    print(model.bottle_neck)
